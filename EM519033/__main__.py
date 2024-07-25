@@ -9,7 +9,7 @@ init(autoreset=True)  # Initialize colorama
 
 def display_meter_data(meter):
     try:
-        print(f"{Fore.YELLOW}{Style.BRIGHT}EM118090 Power Meter Test{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}{Style.BRIGHT}EM519033 Power Meter Test{Style.RESET_ALL}")
         print("\nLoading...", end="", flush=True)
 
         while True:
