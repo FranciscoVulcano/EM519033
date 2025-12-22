@@ -1,9 +1,10 @@
+from gpiozero import OutputDevice, InputDevice
 from dataclasses import dataclass
 from EM519033.CRC import crc_append, validate_crc
 from serial import Serial
 from EM519033.enums import Commands, CommandLenght, ResultFormat,Enum
 from EM519033.response_parser import parse_response
-
+import time, sys
 
 @dataclass
 class ReceiveData:
@@ -27,11 +28,12 @@ class SendData:
 
 
 class EM519033:
-    def __init__(self, port, baudrate=9600, timeout=1):
+    def __init__(self, port, baudrate=9600, timeout=0.05):
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
         self.comm = Serial(self.port, self.baudrate, timeout=self.timeout, parity='E')
+        self.DE_RE = OutputDevice(17)
 
     def send_command(self, data: SendData):
         """
@@ -52,10 +54,13 @@ class EM519033:
         - send_command(SendData(device_id=1, mode=4, command=2, command_length=6)):
           Converts the SendData object to a message, appends CRC, and sends it to the device.
         """
+        self.DE_RE.on()
         message = data.to_string()
         hex_bytes = bytes.fromhex(message)
         message = crc_append(hex_bytes)
         self.comm.write(message)
+        time.sleep((sys.getsizeof(message)/4800)+(1/4800))
+        self.DE_RE.off()
 
     def receive_data(self):
         """
@@ -74,7 +79,7 @@ class EM519033:
         Example:
         - receive_data(): Returns a ReceiveData object or False based on the received and parsed message.
         """
-        message = self.comm.read(20).hex()
+        message = self.comm.readall().hex()
         if not validate_crc(message):
             return False
         data = self.__parse_message(message)
