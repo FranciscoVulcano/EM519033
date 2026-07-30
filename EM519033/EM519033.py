@@ -1,17 +1,19 @@
-from gpiozero import OutputDevice, InputDevice
+import sys
+import time
 from dataclasses import dataclass
 from EM519033.CRC import crc_append, validate_crc
-from serial import Serial
-from EM519033.enums import Commands, CommandLenght, ResultFormat,Enum
+from EM519033.enums import CommandLenght, Commands, Enum, ResultFormat
 from EM519033.response_parser import parse_response
-import time, sys
+from gpiozero import OutputDevice
+from serial import Serial
+
 
 @dataclass
 class ReceiveData:
     device_id: int
     mode: int
     data_lenght: int
-    data: int
+    data: str
     crc: bytes
 
 
@@ -22,134 +24,92 @@ class SendData:
     command: int
     command_lenght: int
 
-    def to_string(self) -> str:
-        return (str(self.device_id).zfill(2) + str(self.mode).zfill(2) + str(self.command).zfill(4) +
-                str(self.command_lenght).zfill(4))
+    def to_bytes(self) -> bytes:
+        hex_str = (
+            str(self.device_id).zfill(2)
+            + str(self.mode).zfill(2)
+            + str(self.command).zfill(4)
+            + str(self.command_lenght).zfill(4)
+        )
+        return bytes.fromhex(hex_str)
 
 
 class EM519033:
-    def __init__(self, port, baudrate=9600, timeout=0.05):
+
+    def __init__(self, port, baudrate=9600, timeout=0.25):
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
-        self.comm = Serial(self.port, self.baudrate, timeout=self.timeout, parity='E')
+        self.comm = Serial(
+            self.port, self.baudrate, timeout=self.timeout, parity="E"
+        )
         self.DE_RE = OutputDevice(17)
 
     def send_command(self, data: SendData):
-        """
-        Convert a SendData object to a message, append CRC, and send it to the device.
+        """Prepares message, flushes incoming junk, and transmits frame."""
+        # 1. Clear any stale bytes sitting in the RX buffer from previous timeout errors
+        self.comm.reset_input_buffer()
 
-        Parameters:
-        - data (SendData): An object containing information to be sent to the device.
+        # 2. Build frame with CRC
+        message = crc_append(data.to_bytes())
 
-        Returns:
-        - None
-
-        Notes:
-        - The method converts the SendData object to a hexadecimal message using the to_string method.
-        - The CRC is appended to the message using the crc_append function.
-        - The final message is sent to the device via the communication interface (self.comm.write).
-
-        Example:
-        - send_command(SendData(device_id=1, mode=4, command=2, command_length=6)):
-          Converts the SendData object to a message, appends CRC, and sends it to the device.
-        """
+        # 3. Drive RS-485 Transmit Mode
         self.DE_RE.on()
-        message = data.to_string()
-        hex_bytes = bytes.fromhex(message)
-        message = crc_append(hex_bytes)
         self.comm.write(message)
-        time.sleep((sys.getsizeof(message)/4800)+(1/4800))
+
+        # 4. Wait for hardware TX buffer to physically flush before dropping RS-485 DE line
+        self.comm.flush()
         self.DE_RE.off()
 
     def receive_data(self):
-        """
-        Receive a message from the device, validate CRC, parse the message, and return the data in a ReceiveData object.
+        """Reads exact Modbus frame length based on header byte count."""
+        # Standard Read Holding Registers (Mode 03) Header is 3 bytes: [ID, Function, ByteCount]
+        header = self.comm.read(3)
+        if len(header) < 3:
+            return False  # Timeout / No response
 
-        Returns:
-        - ReceiveData or False: If CRC validation succeeds, returns a ReceiveData object containing parsed information
-                                (device_id, mode, data_length, data, crc). If CRC validation fails, returns False.
+        data_length = header[2]  # Third byte specifies payload length in bytes
 
-        Notes:
-        - The method assumes that each message is 20 bytes long (adjust if needed).
-        - The method relies on a communication interface represented by self.comm (e.g., a serial port).
-        - The CRC validation is performed using the validate_crc function.
-        - If CRC validation fails, the method returns False, indicating potential communication errors.
+        # Read remaining payload + 2 bytes for CRC
+        remaining = self.comm.read(data_length + 2)
+        if len(remaining) < (data_length + 2):
+            return False  # Incomplete response frame
 
-        Example:
-        - receive_data(): Returns a ReceiveData object or False based on the received and parsed message.
-        """
-        message = self.comm.readall().hex()
-        if not validate_crc(message):
+        raw_frame = header + remaining
+
+        # Validate CRC against exact byte frame
+        if not validate_crc(raw_frame.hex()):
             return False
-        data = self.__parse_message(message)
-        return data
 
-    def __parse_message(self, message):
-        """
-         Parse a received message and create a ReceiveData object with extracted information.
+        device_id = header[0:1].hex()
+        mode = header[1:2].hex()
+        payload_hex = remaining[:data_length].hex()
+        crc_hex = remaining[data_length:].hex()
 
-         Parameters:
-         - message (str): The raw received message in hexadecimal format.
-
-         Returns:
-         - ReceiveData: An object containing the parsed information (device_id, mode, data_length, data, crc).
-
-         Example:
-         - parse_received_message('0102041F4B2E4C0F'): Returns a ReceiveData object with:
-           - device_id = '01'
-           - mode = '02'
-           - data_length = 4
-           - data = '1F4B2E4C'
-           - crc = '0F'
-         """
-        device_id = message[:2]
-        mode = message[2:4]
-        data_lenght = int(message[4:6])
-        data = message[6:(6+data_lenght*2)]
-        crc = message[-4:]
-        return ReceiveData(device_id, mode, data_lenght,data,crc)
+        return ReceiveData(
+            device_id=device_id,
+            mode=mode,
+            data_lenght=data_length,
+            data=payload_hex,
+            crc=crc_hex,
+        )
 
     def get_value(self, device_id, value: Enum):
-        """
-        Retrieve a specific value from a device using the Modbus communication protocol.
+        """Retrieves and parses parameter value from meter."""
+        value_key = value.value
+        command_value = Commands[value_key].value
+        command_length = CommandLenght[value_key].value
 
-        Parameters:
-        - device_id (int): The unique identifier of the target device.
-        - value (Enum): An Enum representing the desired value to retrieve.
-
-        Returns:
-        - Parsed value: The extracted and parsed value based on the specified Enum.
-          Returns None if the communication or parsing process encounters an issue.
-
-        Raises:
-        - Any exceptions related to communication or parsing errors.
-
-        Usage Examples:
-        - Retrieve voltage from device with ID 1:
-          voltage = meter.get_value(1, parameters.InstantaneousParameters.voltage)
-        - Retrieve current from device with ID 1:
-          current = meter.get_value(1, parameters.InstantaneousParameters.current)
-        - Retrieve frequency from device with ID 1:
-          frequency = meter.get_value(1, parameters.InstantaneousParameters.frequency)
-        - Retrieve active total power from device with ID 1:
-          power = meter.get_value(1, parameters.PowerParameters.active_total_power)
-
-        Note:
-        - This function relies on the Modbus communication protocol.
-        - It sends a command to the device to retrieve the specified value.
-        - The response is parsed based on the specified ResultFormat for the corresponding value.
-        """
-
-        value = value.value
-        command_value = Commands[value].value
-        command_length = CommandLenght[value].value
-        message = SendData(device_id=device_id, mode=3, command=command_value, command_lenght=command_length)
+        message = SendData(
+            device_id=device_id,
+            mode=3,
+            command=command_value,
+            command_lenght=command_length,
+        )
         self.send_command(message)
 
-        received_message = self.receive_data()
-        if received_message is False:
+        received = self.receive_data()
+        if not received:
             return None
-        response = received_message.data
-        parsed_value = parse_response(response, ResultFormat[value].value)
-        return parsed_value
+
+        return parse_response(received.data, ResultFormat[value_key].value)

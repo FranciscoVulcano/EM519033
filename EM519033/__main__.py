@@ -20,14 +20,19 @@ def display_meter_data(meter):
             current2 = meter.get_value(1, parameters.MeterParameters.L2_CURRENT)
             current3 = meter.get_value(1, parameters.MeterParameters.L3_CURRENT)
             frequency = meter.get_value(1, parameters.MeterParameters.GRID_FREQUENCY)
-            power = meter.get_value(1, parameters.MeterParameters.TOTAL_ACTIVE_POWER)
+            totalActiveEnergy = meter.get_value(1, parameters.MeterParameters.FORWARD_ACTIVE_ENERGY)
+            totalReactiveEnergy = meter.get_value(1, parameters.MeterParameters.TOTAL_REACTIVE_ENERGY)
+            ActivePower = meter.get_value(1, parameters.MeterParameters.TOTAL_ACTIVE_POWER)
+            RectivePower = meter.get_value(1, parameters.MeterParameters.TOTAL_REACTIVE_POWER)
+            powerFactor = meter.get_value(1, parameters.MeterParameters.POWER_FACTOR)
             print("\033[H\033[J", end="")  # Clear the terminal screen (works on Windows with colorama)
 
             print(f"{Fore.YELLOW}{Style.BRIGHT}EM118090 Power Meter Test{Style.RESET_ALL}")
             print(f"{Fore.GREEN}Voltage L1:{Style.RESET_ALL} {voltage1} V {Fore.GREEN}Voltage L2:{Style.RESET_ALL} {voltage2} V {Fore.GREEN}Voltage L3:{Style.RESET_ALL} {voltage3} V")
             print(f"{Fore.BLUE}Current L1:{Style.RESET_ALL} {current1} A {Fore.BLUE}Current L2:{Style.RESET_ALL} {current2} A {Fore.BLUE}Current L3:{Style.RESET_ALL} {current3} A")
-            print(f"{Fore.CYAN}Frequency:{Style.RESET_ALL} {frequency} Hz")
-            print(f"{Fore.MAGENTA}Power:{Style.RESET_ALL} {power} kWh")
+            print(f"{Fore.CYAN}Frequency:{Style.RESET_ALL} {frequency} Hz {Fore.CYAN}Power Factor:{Style.RESET_ALL} {powerFactor}")
+            print(f"{Fore.MAGENTA}Active power:{Style.RESET_ALL} {ActivePower} kW {Fore.MAGENTA}Reactive power:{Style.RESET_ALL} {RectivePower} kW")
+            print(f"{Fore.MAGENTA}Active energy:{Style.RESET_ALL} {totalActiveEnergy} kWh {Fore.MAGENTA}Reactive energy:{Style.RESET_ALL} {totalReactiveEnergy} kWh")
             print(f"\n{Fore.WHITE}Press 'Ctrl+C' to exit{Style.RESET_ALL}")
 
     except KeyboardInterrupt:
